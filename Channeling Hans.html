@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Channeling Hans</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" type="text/css" media="screen" href="main.css" />
+    <script src="d3/d3.v4.js"></script>
+</head>
+
+<body>
+    <div class="hide-chrome">
+        Best viewed in Chrome.
+    </div>
+    <div id="first-row">
+        <div id="visualizations">
+        </div>
+        <div style="vertical-align: top;">
+            <h3>Country Selection</h3>
+            <select multiple id="country-select" size="20">
+            </select>
+        </div>
+    </div>
+    <script>
+        if (navigator.appVersion.indexOf("Chrome/") != -1) {
+            d3.selectAll(".hide-chrome").remove();
+        }   
+
+        // Setting the used color pallets for different regions
+        const ColorPalett = ['#bebada', '#fb8072', '#80b1d3', '#fdb462', '#b3de69', '#fccde5', '#d9d9d9'];
+        // Setting colors for selection
+        const SelectionColors = ['#8dd3c7', '#efefa7'];
+        // Defining the dimensions of the main plot
+        const plot = {
+            outer_width: 800,
+            outer_height: 700,
+            margin: {
+                top: 10,
+                right: 10,
+                bottom: 50,
+                left: 50
+            },
+            legend_offset: 20,
+            width: 0,
+            height: 0,
+            canvas: null
+        };
+        // Defining the dimensions of the pillar plot
+        const pillarPlot = {
+            outer_height: plot.outer_height,
+            outer_width: 400,
+            margin: {
+                top: 80,
+                right: 25,
+                bottom: 50,
+                left: 190
+            },
+            legend_margin: {
+                top: 60,
+                left: 20
+            },
+            title_margin: {
+                top: 14,
+            },
+            width: 0,
+            height: 0,
+            canvas: null
+        }
+        // Defining the dimensions of the control bar
+        const control = {
+            outer_width: plot.outer_width,
+            outer_height: 100,
+            margin: {
+                top: 25,
+                right: 25,
+                bottom: 10,
+                left: 25
+            },
+            lineOffset: 50,
+            width: 0,
+            height: 0,
+            canvas: null
+        }
+        // Defining all keys of the given data (avoid bugs through constants)
+        const keys = {
+            country: 'Country',
+            population: 'Population',
+            competitiveness: 'Global_Competitiveness_Index',
+            gdp: 'GDP',
+            incomeGroup: 'Income group',
+            year: 'Year',
+            region: 'Region',
+            classification: 'Forum classification',
+            pillars: [
+                '1st_pillar_Institutions', '2nd_pillar_Infrastructure', '3rd_pillar_Macroeconomic_environment',
+                '4th_pillar_Health_and_primary_education', '5th_pillar_Higher_education_and_training',
+                '6th_pillar_Goods_market_efficiency', '7th_pillar_Labor_market_efficiency',
+                '8th_pillar_Financial_market_development', '9th_pillar_Technological_readiness',
+                '10th_pillar_Market_size', '11th_pillar_Business_sophistication_', '12th_pillar_Innovation'
+            ],
+        }
+        // Define human readable names for all pillars
+        const pillarNames = [
+            'Insitutions',
+            'Infrastructure',
+            'Macroeconimic environment',
+            'Health & primary education',
+            'Higher education & training',
+            'Goods market efficiency',
+            'Labor market efficiency',
+            'Financial market development',
+            'Technological readiness',
+            'Market size',
+            'Business sophistication',
+            'Innovation'
+        ]
+        // Generate a svg element based on the given dimensions
+        function generateSvgCanvas(dims, parent) {
+            dims.width = dims.outer_width - dims.margin.left - dims.margin.right;
+            dims.height = dims.outer_height - dims.margin.top - dims.margin.bottom;
+
+            dims.svg = d3.select(parent)
+                .append("svg")
+                .attr("width", dims.outer_width)
+                .attr("height", dims.outer_height);
+            dims.canvas = dims.svg.append("g")
+                .attr("transform", "translate(" + dims.margin.left + "," + dims.margin.top + ")");
+        }
+        // Generate a canvas for all elements
+        generateSvgCanvas(plot, "#visualizations");
+        generateSvgCanvas(pillarPlot, "#visualizations");
+        generateSvgCanvas(control, "body");
+        // Set the width of the visualization container to ensure that the main plot and pillar plot are displayed in one row
+        d3.select("#first-row").style("width", plot.outer_width + pillarPlot.outer_width + 200 + 'px');
+
+        // Set up the scale to be used on the x axis
+        const xScale = d3.scaleLog()
+            .range([0, plot.width]);
+        // Set up the scale to be used on the y axis
+        const yScale = d3.scaleLinear()
+            .range([plot.height, 0]);
+
+        // Create an x-axis connected to the x scale
+        const xAxis = d3.axisBottom()
+            .scale(xScale)
+            .ticks(5)
+            .tickFormat(d => xScale.tickFormat(4, d3.format(",d"))(d));
+        //Define Y axis
+        const yAxis = d3.axisLeft()
+            .scale(yScale)
+            .ticks(5);
+
+        // Define scales for the pillar plot
+        const pxScale = d3.scaleLinear()
+            .range([0, pillarPlot.width]);
+        const pyScale = d3.scaleBand()
+            .range([0, pillarPlot.height])
+            .domain(pillarNames);
+        // Defining axes for pillar plot
+        const pxAxis = d3.axisBottom()
+            .scale(pxScale);
+        const pyAxis = d3.axisLeft()
+            .scale(pyScale);
+
+        // Define container for several elements in the main plot
+        var readingHelp = plot.canvas.append("g").attr("id", "reading-help");
+        var tracePoints = plot.canvas.append("g").attr("id", "trace-bubbles");
+        var plotPoints = plot.canvas.append("g").attr("id", "bubbles");
+        var plotLabels = plot.canvas.append("g").attr("id", "labels");
+        var traceLabels = plot.canvas.append("g").attr("id", "trace-labels");
+        var legend = plot.canvas.append("g")
+            .attr("transform", "translate(" + plot.legend_offset + ",0)").attr("id", "legend");
+
+        // Setup the x label
+        plot.canvas.append("text")
+            .attr("transform",
+                `translate(${plot.width / 2}, ${plot.height + plot.margin.top + 40})`)
+            .style("text-anchor", "middle")
+            .text("Gross Domestic Product (GDP)");
+
+        // Setup the y label
+        plot.canvas.append("text")
+            .attr("transform", "rotate(-90)")
+            .attr("y", 0 - plot.margin.left)
+            .attr("x", 0 - (plot.height / 2))
+            .attr("dy", "1em")
+            .style("text-anchor", "middle")
+            .text("Gloabl Competitiveness");
+
+        // Define container for several elements in the pillar plot
+        var pillarBars = pillarPlot.canvas.append("g").attr("id", "pillar-bars");
+        var pillarLabels = pillarPlot.canvas.append("g").attr("id", "pillar-labels");
+        var pillarLegend = pillarPlot.svg.append("g")
+            .attr("id", "pillar-legend")
+            .attr("transform", `translate(${pillarPlot.legend_margin.left}, ${pillarPlot.legend_margin.top})`);
+        // Add title for this plot
+        pillarPlot.svg.append("text")
+            .text("Competitiveness Breakdown")
+            .classed("title", true)
+            .attr("x", pillarPlot.outer_width / 2)
+            .attr("y", pillarPlot.title_margin.top);
+
+        // This class represents a country. It eases the access to fixed fields like region, name or classification and contains a dictionary with all yearly specific data.
+        class Country {
+            // The parameter entries is an array of all csv rows which belong to this country.
+            constructor(entries) {
+                this.region = entries[0][keys.region];
+                this.income_group = entries[0][keys.incomeGroup];
+                this.classification = entries[0][keys.classification];
+                this.name = entries[0][keys.country];
+                this.yearlyData = {}
+                // Setup yearly data from given array
+                entries.forEach(entry => {
+                    var year = entry[keys.year]
+                    // Copy the given entry and 
+                    var data = Object.assign({}, entry);
+
+                    for (var key in data) {
+                        var val = parseFloat(data[key]);
+                        data[key] = val;
+                    }
+                    // Add reference this country
+                    data.country = this;
+                    this.yearlyData[year] = data;
+                });
+            }
+
+            // Get the id of select option
+            get optionId() {
+                return `option_${this.name.replace(/[^a-zA-Z]/g, "")}`;
+            }
+
+            // Get the main bubble
+            get circle() {
+                return this.getCircle(null);
+            }
+
+            // Returns the trace bubble for the specified year. If year==null the main bubble is returned
+            getCircle(year) {
+                return d3.select(`#${this.getCircleId(year)}`);
+            }
+
+            // Get the main label
+            get label() {
+                return this.getLabel(null);
+            }
+
+            // Returns the trace labels for the specified year. If year==null the main label is returned
+            getLabel(year) {
+                return d3.select(`#${this.getLabelId(year)}`);
+            }
+
+            //Return the bounding box of the trace label for year. If year==null the main label is used.
+            getLabelBB(year) {
+                return this.getLabel(year).select("text").node().getBBox();
+            }
+
+            //Returns the id of the main bubble
+            get circleId() {
+                return 'circle_' + this.name.replace(/[^a-zA-Z]/g, "");
+            }
+
+            // Return the id of the main label
+            get labelId() {
+                return 'label_' + this.name.replace(/[^a-zA-Z]/g, "");
+            }
+
+            // Returns the id for the trace bubble of the given year
+            getCircleId(year) {
+                return this.circleId + (year == null ? '' : year);
+            }
+
+            // Returns the id for the trace label of the given year
+            getLabelId(year) {
+                return this.labelId + (year == null ? '' : year);
+            }
+
+            // Return the transform for bubble at the given year
+            transform(year) {
+                var x = scaleX(this.getValue(year, keys.gdp));
+                var y = scaleY(this.getValue(year, keys.competitiveness));
+                return `translate(${x},${y})`;
+            }
+
+            // Return the transform for label at the given year
+            // This is the transform for the bubble but shifted to the top left by the radius and a constant offset.
+            labelTransform(year) {
+                var x = scaleX(this.getValue(year, keys.gdp));
+                var y = scaleY(this.getValue(year, keys.competitiveness));
+                var r = scaleR(this.getValue(year, keys.population));
+                r = r + 12;
+                r = Math.sqrt(r * r / 2);
+                return `translate(${x-r}, ${y-r})`;
+            }
+
+            // Return the radius for the given year
+            radius(year) {
+                return scaleR(this.getValue(year, keys.population));
+            }
+
+            // Helper function which returns the index of the next higher year which is not NaN for the specified attribute.
+            _upperBound(years, index, key) {
+                if (index == years.length - 1) {
+                    return -1;
+                }
+                while (++index < years.length && isNaN(this.yearlyData[years[index]][key]));
+                if (index == years.length) {
+                    return -1;
+                }
+                return index;
+            }
+
+            // Helper function which returns the index of the next lower year which is not NaN for the specified attribute.
+            _lowerBound(years, index, key) {
+                if (index == 0) {
+                    return -1;
+                }
+                while (--index >= 0 && isNaN(this.yearlyData[years[index]][key]));
+                return index;
+            }
+
+            // Returns the value for the specified key for the given year. If the year has no value for the given key it is linearly interpolated between its neighbors which have keys. If one neighbor is mising the other is returned as result.
+            getValue(year, key) {
+                if (!isNaN(this.yearlyData[year][key])) {
+                    return this.yearlyData[year][key];
+                }
+                var years = Object.keys(this.yearlyData);
+                // Getting the index of the current year
+                var index = years.indexOf(year.toString());
+                // Finding both bounds
+                var lowerBound = this._upperBound(years, index, key);
+                var upperBound = this._lowerBound(years, index, key)
+                // Check if any of them is not present
+                if (lowerBound == -1) {
+                    return this.yearlyData[years[upperBound]][key];
+                }
+                if (upperBound == -1) {
+                    return this.yearlyData[years[lowerBound]][key];
+                }
+                // retrieve values
+                var lowerYear = years[lowerBound];
+                var upperYear = years[upperBound];
+                var lowerValue, upperValue;
+                lowerValue = this.yearlyData[lowerYear][key];
+                upperValue = this.yearlyData[upperYear][key];
+                // Linear interpolation
+                var result = (year - lowerYear) / (upperYear - lowerYear) * (upperValue - lowerValue) + lowerValue;
+                return result;
+            }
+
+            // Returns the highest value for a given key
+            getMax(key) {
+                var max = -1;
+                for (var year in this.yearlyData) {
+                    if (this.yearlyData[year][key] > max) {
+                        max = this.yearlyData[year][key];
+                    }
+                }
+                return max;
+            }
+
+            // Returns the lowest value for a given key
+            getMin(key) {
+                var min = -1;
+                for (var year in this.yearlyData) {
+                    if (!isNaN(this.yearlyData[year][key]) && (this.yearlyData[year][key] < min || min == -1)) {
+                        min = this.yearlyData[year][key];
+                    }
+                }
+                return min;
+            }
+
+            // Returns true of data for a given year is provided
+            hasYear(year) {
+                return year in this.yearlyData;
+            }
+        }
+
+        // Some variables which are set later on
+        var minComp, maxComp, minGdp, maxGdp, minYear, maxYear, maxPillar, year, yearScale, controlHandle, playButton,
+            countries;
+        // Color map which maps country classification to a color
+        var colorMap = {};
+
+        // Loading the dataset
+        d3.csv('./GCI_CompleteData4.csv', data => {
+            // Group dataset by country
+            var grouped = groupBy(data, keys.country);
+            // Construct all countries
+            countries = [];
+            for (var name in grouped) {
+                countries.push(new Country(grouped[name]));
+            }
+
+            d3.select("#country-select").selectAll("option")
+                .data(countries, c => c == undefined ? c : c.name)
+                .enter()
+                .append("option")
+                .attr("id", c => c.optionId)
+                .text(c => c.name)
+                .on('click', c => {
+                    onClickCountry(c);
+                })
+            d3.select("#country-select").on('change', updateCountryList);
+
+            // Define lower and upper bounds
+            // The hardcoded results are personally chosen based on the calculated one to include margin on all sides
+            minGdp = getMin(countries, keys.gdp);
+            maxGdp = getMax(countries, keys.gdp);
+            minGdp = 50;
+            maxGdp = 200000;
+            minComp = getMin(countries, keys.competitiveness);
+            maxComp = getMax(countries, keys.competitiveness);
+            minComp = 2.5;
+            maxComp = 6;
+            minYear = getMin(countries, keys.year);
+            maxYear = getMax(countries, keys.year);
+            minYear = 2007;
+            maxYear = 2017;
+            maxPillar = Math.max(...keys.pillars.map(pillar => getMax(countries, pillar)));
+
+            // Setting up the axis scales
+            xScale.domain([minGdp, maxGdp]);
+            yScale.domain([minComp, maxComp]);
+
+            // Create the x-axis
+            plot.canvas.insert("g", ":first-child")
+                .attr("class", "axis")
+                .attr("id", "x-axis")
+                .attr("transform", `translate(0, ${plot.height})`)
+                .call(xAxis);
+
+            // Create the y axis
+            plot.canvas.insert("g", ":first-child")
+                .attr("class", "axis")
+                .attr("id", "y-axis")
+                .call(yAxis);
+
+            // Create the pillar x axis
+            pxScale.domain([0, Math.ceil(maxPillar)]);
+            pxAxis.ticks(Math.ceil(maxPillar));
+
+            pillarPlot.canvas.append("g")
+                .attr("class", "axis")
+                .attr("id", "pillar-x-axis")
+                .attr("transform", "translate(0," + pillarPlot.height + ")")
+                .call(pxAxis);
+
+            // Create the pillar y axis
+            pillarPlot.canvas.append("g")
+                .attr("class", "axis")
+                .attr("id", "pillar-y-axis")
+                .call(pyAxis);
+
+            pillarPlot.canvas.append("text")
+                .attr("transform",
+                    `translate(${pillarPlot.width / 2},
+                    ${pillarPlot.height + pillarPlot.margin.top + 20})`
+                )
+                .style("text-anchor", "middle")
+                .text("Value");
+
+            // Setting up the colors
+            var regions = countries.map(c => c.classification).filter(unique);
+            for (var i = 0; i < regions.length; i++) {
+                colorMap[regions[i]] = ColorPalett[i];
+            }
+
+
+            // Build legend to the left
+            var enteredLegend = legend.selectAll("g")
+                .data(regions)
+                .enter();
+
+            enteredLegend.append("circle")
+                .attr("cy", (region, i) => i * 25 + 10)
+                .attr("r", 7.5)
+                .attr("fill", region => colorMap[region])
+                .classed("legend-circle", true);
+
+            enteredLegend.append("text")
+                .classed("legend", true)
+                .text(region => region)
+                .attr("y", (region, i) => i * 25 + 10);
+
+
+            //Setup control
+            //Create scale for years
+            yearScale = d3.scaleLinear()
+                .domain([minYear, maxYear])
+                .range([0, control.width - control.lineOffset]);
+            //Create slider
+            var slider = control.canvas.append("g")
+                .attr("transform", `translate(${control.lineOffset}, 0)`)
+                .classed("slider", true);
+
+            slider.append("line")
+                .attr("x1", yearScale.range()[0])
+                .attr("x1", yearScale.range()[1])
+                .call(d3.drag()
+                    .on("start drag", () => {
+                        var x = d3.event.x + yearScale.range()[1] / (maxYear - minYear) / 2;
+                        var newYear = parseInt(yearScale.invert(x));
+                        playPause(false);
+                        if (newYear != year)
+                            generateVis(newYear, selection);
+                    }));
+            // Create control handle
+            controlHandle = slider.append("circle")
+                .attr("cx", 0)
+                .attr("cy", 0)
+                .attr("r", 15);
+            // Create slider legend
+            slider.append("g")
+                .attr("transform", `translate(0, 36)`)
+                .selectAll("text")
+                .data(yearScale.ticks(maxYear - minYear))
+                .enter()
+                .append("text")
+                .attr("x", yearScale)
+                .text(d => d);
+
+            // Create the play/pause button
+            playButton = control.canvas.append("g")
+                .classed("play-btn", true);
+
+            playButton.append("circle")
+                .attr("cx", 0)
+                .attr("cy", 0)
+                .attr("r", 18);
+            playButton.append("text")
+                .text("▶")
+                .on('click', () => {
+                    playPause();
+                });
+            // Generate first visualization
+            generateVis(minYear, []);
+        });
+
+        // Maps an gdp value to its position on the x-axis. Mind the logartihmic scale
+        function scaleX(gdp) {
+            return plot.width * Math.log(gdp / minGdp) / Math.log(maxGdp / minGdp);
+        }
+
+        // Maps a competitiveness score to its position on the y-axis.
+        function scaleY(comp) {
+            return plot.height - plot.height * (comp - minComp) / (maxComp - minComp);
+        }
+
+        // Returns the radius of a circle where the circle area is proportional to the provided population.
+        function scaleR(population) {
+            return Math.sqrt(population) / (650000 / plot.width);
+        }
+
+        // Returns the color for the stroke around bubbles. If a bubble is selected its stroke should change.
+        function strokeColor(country) {
+            return isSelected(country) ?
+                SelectionColors[selection.length - 1 - selection.indexOf(country)] :
+                "black";
+        }
+
+        // Function which is called whenever the user hovers over any bubble.
+        // newHoveredYear is only used when the uesr hovers over trace bubbles.
+        function startHover(country, newHoveredYear) {
+            // If years are identical set to no year provided.
+            if (newHoveredYear == year) {
+                hoveredYear = null;
+            } else {
+                hoveredYear = newHoveredYear;
+            }
+            hovered = country;
+            // Set hovered state for the hovered item
+            country.getCircle(hoveredYear)
+                .classed("hovered", true);
+            country.getLabel(hoveredYear)
+                .classed("hovered", true);
+            // Blen out all other items
+            plotPoints.selectAll("circle")
+                .classed("blend-out", true);
+            // tracePoints.selectAll("circle")
+            //     .classed("blend-out", true);
+            country.getCircle(hoveredYear)
+                .classed("blend-out", false);
+
+            // Draw the reading help
+            drawReadingHelp();
+        }
+
+        // This function is called whenever a country loses its hover state.
+        function stopHover(country) {
+            hovered = null;
+            hoveredYear = null;
+            // Remove all hovered and blend-out states
+            plotPoints.selectAll("circle")
+                .classed("hovered", false)
+            // .classed("blend-out", false);
+
+            tracePoints.selectAll("circle")
+                .classed("hovered", false)
+            // .classed("blend-out", false);
+
+            plotLabels.selectAll("g")
+                .classed("hovered", false);
+            traceLabels.selectAll("g")
+                .classed("hovered", false);
+
+            drawReadingHelp();
+            drawMainVis();
+        }
+
+        // Variables for hover and selection
+        var hoveredYear = null;
+        var hovered = null;
+        var selection = [];
+
+        // Returns true if the provided country is currently selected
+        function isSelected(country) {
+            return isIn(selection, country);
+        }
+
+        // Removes an country from selection
+        function removeSelection(country) {
+            if (isSelected(country)) {
+                selection.splice(selection.indexOf(country), 1);
+                generateVis(year, selection);
+            }
+        }
+
+        // Adds a country to selection. If the selection exceeds its limit the first item will be removed.
+        function addSelection(country) {
+            if (!isSelected(country)) {
+                if (selection.length >= SelectionColors.length) {
+                    selection.shift();
+                }
+                selection.push(country);
+                generateVis(year, selection);
+            }
+        }
+
+        // Handles what happens if a user clicks on a country
+        function onClickCountry(country) {
+            if (isSelected(country)) {
+                removeSelection(country);
+            } else {
+                addSelection(country);
+            }
+        }
+
+        // Generates the whole visualization with all subvisualizations
+        function generateVis(newYear, newSelection) {
+            // If the year is not valid return
+            if (newYear < minYear || newYear > maxYear)
+                return;
+            selection = newSelection;
+            year = newYear;
+            // Update control handle position
+            controlHandle.transition()
+                .attr("cx", yearScale(year));
+
+            // Updating the selection box for countries
+            updateCountryList();
+
+            // Draw all sub visualizations
+            drawMainVis();
+            drawPillars();
+            drawTrace();
+            drawReadingHelp();
+        }
+
+        // This function sets the selection of the country select equal to the javascript selection
+        function updateCountryList() {
+            d3.select("#country-select").selectAll("option")
+                .data(countries, c => c == undefined ? c : c.name)
+                .property("selected", isSelected);
+        }
+
+        // Calling this function draws the main visualization (bubble plot without trace)
+        function drawMainVis() {
+            // This filters the active countries on whether they have data for the current year available.
+            // I also sort the countries by their population so bigger countries appear behind smaller ones.
+            var currentCountries = countries.filter(country =>
+                    country.hasYear(year))
+                .sort((c1, c2) =>
+                    c2.getValue(year, keys.population) - c1.getValue(year, keys.population));
+
+            // Select all bubbles
+            var points = plotPoints.selectAll("circle")
+                .data(currentCountries, country => country.name);
+
+            // Add Point
+            points.enter()
+                .append("circle")
+                .attr("id", country => country.circleId)
+                .classed("country-circle", true)
+                .on("mouseover", c => startHover(c, null))
+                .on("mouseout", c => stopHover(c))
+                .on("click", onClickCountry)
+                .attr("transform", country => country.transform(year))
+                .style("fill", country => colorMap[country.classification])
+                // Set attributes for new and old bubbles
+                .merge(points)
+                .classed("blend-out", selection.length > 0)
+                .classed('selected', isSelected)
+                .transition()
+                .duration(300)
+                .attr("r", country => country.radius(year))
+                .attr("transform", country => country.transform(year))
+                .attr("stroke", strokeColor);
+
+            // Remove countries without data
+            points.exit()
+                .transition()
+                .duration(300)
+                .attr("r", 0)
+                .remove();
+
+            // Select all labels
+            var labels = plotLabels.selectAll("g")
+                .data(currentCountries, country => country.name);
+
+            // Update labels
+            labels.classed('selected', isSelected)
+                .transition()
+                .duration(300)
+                .attr("transform", country => country.labelTransform(year));
+
+            // Add new labels
+            var entered = labels.enter()
+                .append("g")
+                .attr("id", c => c.labelId)
+                .classed("country-label", true)
+                .attr("transform", c => c.labelTransform(year))
+                .classed('selected', isSelected);
+
+            // Add text for new labels
+            entered.append("text")
+                .text(c => c.name)
+                .attr("transform", "translate(0, 5)");
+
+            var pad_x = 10;
+            var pad_y = 5;
+
+            // Add the background for new labels
+            entered.insert("rect", ":first-child")
+                .attr("width", c => c.getLabelBB(null).width + pad_x)
+                .attr("height", c => c.getLabelBB(null).height + pad_y)
+                .attr("x", c => -(c.getLabelBB(null).width + pad_x / 2))
+                .attr("y", c => -(c.getLabelBB(null).height + pad_y) / 2)
+                .attr("rx", 3)
+                .attr("ry", 3)
+                .attr("fill", "white");
+
+            // Remove labels for countries without data
+            labels.exit()
+                .remove();
+        }
+
+        // Calling this functions draws the help lines and actual values for the hovered bubble.
+        function drawReadingHelp() {
+            // Check the year of the bubble (only differs if a trace bubble is hovered).
+            var _year = hoveredYear == null ? year : hoveredYear;
+            // Data equals the two axis or none if nothing is hovered.
+            // 0 and 1 are used to cut the positioning code by mathematical functions.
+            var data = hovered == null ? [] : [0, 1];
+            // Select the help lines
+            var lines = readingHelp.selectAll("line")
+                .data(data);
+            // Select the labels for values
+            var values = readingHelp.selectAll("text")
+                .data(data);
+
+            // Pre calculate x,y values and positions, since they are used multiple times
+            if (hovered != null) {
+                var x_val = hovered.getValue(_year, keys.gdp)
+                var x = scaleX(x_val);
+                var y_val = hovered.getValue(_year, keys.competitiveness);
+                var y = scaleY(y_val);
+            }
+
+            // Add new reading help
+            lines.enter()
+                .insert("line", ":first-child")
+                .attr("stroke", "black")
+                .attr("stroke-dasharray", "5, 5")
+                // Set position for old and new lines
+                .merge(lines)
+                .attr("x1", d => d * x)
+                .attr("y1", d => d == 0 ? y : plot.height)
+                .attr("x2", x)
+                .attr("y2", y);
+
+            // Add new value labels
+            values.enter()
+                .insert("text", ":first-child")
+                // Update new and old labels
+                .merge(values)
+                .attr("x", d => d * x)
+                .attr("y", d => d == 0 ? y : plot.height)
+                .text(d => Math.round((d == 0 ? y_val : x_val) * 10) / 10)
+                .attr("text-anchor", d => d == 0 ? "end" : "middle")
+                .attr("transform", d => `translate(${8*(d-1)}, ${d*35})`);
+
+            // Remove lines and labels if nothing is selected
+            lines.exit().remove();
+            values.exit().remove();
+        }
+
+        var lastHisData = [];
+        // Calling this function draws the trace bubbles for the most recent selected country to the main visualization
+        function drawTrace() {
+            // Most recently selected country
+            var selected = selection[selection.length - 1];
+            // Yearly data
+            var hisData = []
+            if (selected != null) {
+                // Get trace data from selection. Note: it is sorted by year.
+                hisData = Object.values(selected.yearlyData).filter(y => y[keys.year] <= year);
+            }
+            // Select all trace bubbles
+            var hisPoints = tracePoints.selectAll("circle")
+                .data(hisData, data => data.country.name + data[keys.year]);
+            // Select all labels for trace
+            var hisLabels = traceLabels.selectAll("g")
+                .data(hisData, data => data.country.name + data[keys.year]);
+
+            lastHisLength = hisData.filter(d => lastHisData.indexOf(d) !== -1).length;
+            // Add new bubbles
+            hisPoints.enter()
+                .append("circle")
+                .attr("id", data => selected.circleId + data.year)
+                .attr("transform", data => selected.transform(data[keys.year]))
+                .classed("country-circle", true)
+                .classed("country-trace", true)
+                .on("mouseover", data => startHover(data.country, data[keys.year]))
+                .on("mouseout", data => stopHover(data.country))
+                // Increase saturation the more recent data is
+                // .style("opacity", data => (data[keys.year] - minYear) / (maxYear - minYear) / 2 + 0.4)
+                // Delay appearance in chronological order such that the most recent data pop ups last
+                .transition()
+                .delay((d, i) => (i-lastHisLength) * 50)
+                .duration(200)
+                .attr("r", data => selected.radius(data[keys.year]))
+                .style("fill", data => colorMap[selected.classification]);
+
+            // Add new labels for trace bubbles
+            var entered = hisLabels.enter()
+                .append("g")
+                .attr("id", data => selected.labelId + data[keys.year])
+                .classed("country-label", true)
+                .classed("country-trace", true)
+                .attr("transform", d => selected.labelTransform(d[keys.year]));
+
+            // Add text to the label
+            entered.append("text")
+                .text(d => d[keys.year]);
+
+            var pad_x = 10;
+            var pad_y = 5;
+
+            // Add the background to the label
+            entered.insert("rect", ":first-child")
+                .attr("width", d => d.country.getLabelBB(d[keys.year]).width + pad_x)
+                .attr("height", d => d.country.getLabelBB(d[keys.year]).height + pad_y)
+                .attr("x", d => -(d.country.getLabelBB(d[keys.year]).width + pad_x / 2))
+                .attr("y", d => -(d.country.getLabelBB(d[keys.year]).height + pad_y) / 2)
+                .attr("rx", 3)
+                .attr("ry", 3);
+
+            // Remove trace bubbles
+            hisPoints.exit()
+                .interrupt()
+                .transition()
+                .duration(200)
+                .attr("r", 0)
+                .remove();
+            // Remove trace labels
+            hisLabels.exit().remove();
+            lastHisData = hisData;
+        }
+
+        // Draws the second visualization to display the individual pillars
+        function drawPillars() {
+            // Reverse the selection so the most recent selection is the first one
+            var reverseSel = selection.slice().reverse();
+            // Selecting the data to visualize
+            var pillarData = reverseSel.filter(c => c.hasYear(year)).map((c, ind) =>
+                keys.pillars.map((name, i) => {
+                    return {
+                        value: c.getValue(year, name),
+                        pillar: name,
+                        index: i,
+                        country_index: ind,
+                        country: c
+                    }
+                }));
+            // Flatten
+            pillarData = [].concat.apply([], pillarData);
+            // number of selected countries
+            var nSelection = selection.length;
+            // Select all pillars
+            var pillars = pillarBars.selectAll("rect")
+                .data(pillarData, p => p.pillar + p.country.name);
+            // Select all pillar labels
+            var labels = pillarLabels.selectAll("text")
+                .data(pillarData, p => p.pillar + p.country.name);
+
+            // Calculate the height of each pillar
+            var pillarHeight = pillarPlot.height / 15 / nSelection;
+
+            // Function which calculates the y position of each bawr
+            const y = (p, i) => p.index * pillarPlot.height / 12 + pillarHeight * p.country_index + pillarHeight *
+                nSelection / 8;
+
+            // add new pillars
+            pillars.enter()
+                .append("rect")
+                .classed("pillar", true)
+                .attr("x", 0.5) // moving it 0.5 to the right to compensate for the border
+                .attr("y", y)
+                .attr("stroke", "black")
+                // Update the old and new pillars
+                .merge(pillars)
+                .attr("fill", d => strokeColor(d.country))
+                .transition()
+                .delay((p, i) => i * 10)
+                .duration(150)
+                .attr("height", pillarHeight)
+                .attr("y", y)
+                .attr("width", p => p.value * pillarPlot.width / maxPillar - 1); // -1 to compensate the stroke border
+
+            // Remove old pillars
+            pillars.exit()
+                .transition()
+                .delay((p, i) => i * 10)
+                .duration(150)
+                .attr("width", 0)
+                .remove();
+
+            // Add new labels
+            labels.enter()
+                .append("text")
+                .attr("x", 8)
+                .attr("y", y)
+                // Update old and new labels
+                .merge(labels)
+                .transition()
+                .duration(300)
+                .attr("y", (p, i) => y(p, i) - 10 * nSelection + 36)
+                .text(p => Math.round(p.value * 100) / 100);
+            // Remove labels of removed selection
+            labels.exit()
+                .remove()
+
+            // Draw legend
+            // Select the rectangles representing the countires
+            var legendRects = pillarLegend.selectAll("rect")
+                .data(reverseSel, (c, i) => i);
+            // Select the fitting labels
+            var legendLabels = pillarLegend.selectAll("text")
+                .data(reverseSel, (c, i) => c.name);
+
+            // Add rectangles for the new selections
+            legendRects.enter()
+                .append("rect")
+                .attr("width", 20)
+                .attr("height", 20)
+                .classed("legend-rect", true)
+                // Update length and color for all rectangles
+                .merge(legendRects)
+                .attr("fill", strokeColor)
+                .attr("x", (c, i) => i * (pillarPlot.outer_width - 2 * pillarPlot.legend_margin.left) / 2 + 10);
+
+            // Remove rectangle if a selection is removed
+            legendRects.exit()
+                .transition()
+                .duration(300)
+                .attr("width", 0)
+                .attr("height", 0)
+                .style("transform", "translate(10px, 10px)")
+                .remove();
+
+            // Add country name label to the legend
+            legendLabels.enter()
+                .append("text")
+                .classed("legend", true)
+                .text(c => c.name)
+                .attr("x", -200)
+                // Update position of old and new labels
+                .merge(legendLabels)
+                .transition()
+                .duration(300)
+                .attr("x", (p, i) => i * (pillarPlot.outer_width - 2 * pillarPlot.legend_margin.left) / 2 + 20);
+
+            // Remove labels of countries which have been removed from selection
+            legendLabels.exit()
+                .remove();
+        }
+
+        // Timer id which is used for automatic year transition
+        var timer = -1;
+
+        // Calling this function either starts or pauses the year transition
+        function playPause(play = undefined) {
+            if ((timer == -1 && play === undefined) || play === true) {
+                // Start new timer
+                // Start from the first year if the current year is the last one
+                var nextYear = year < maxYear ? year + 1 : minYear;
+                timer = setInterval(() => {
+                    generateVis(nextYear, selection);
+                    nextYear += 1;
+                    // If the last year is reached pause
+                    if (nextYear > maxYear) {
+                        playPause();
+                    }
+                }, 1000);
+                playButton.select("text").text("❚❚");
+            } else {
+                // Stop timer
+                clearInterval(timer);
+                timer = -1;
+                playButton.select("text").text("▶");
+            }
+        }
+
+        // Returns the minimal value across all countries for the given key
+        function getMin(countries, key) {
+            return Math.min(...countries.map(country => country.getMin(key)));
+        }
+
+        // Returns the maximal value across all countries for the given key
+        function getMax(countries, key) {
+            return Math.max(...countries.map(country => country.getMax(key)));
+        }
+
+        // Groups an array based on the provided key
+        // This is copied from stackoverflow
+        function groupBy(array, key) {
+            return array.reduce(function (rv, x) {
+                (rv[x[key]] = rv[x[key]] || []).push(x);
+                return rv;
+            }, {});
+        };
+
+        // This filters an array to only contain only distinct values
+        function unique(value, index, self) {
+            return self.indexOf(value) === index;
+        }
+
+        // Helper function that returns true if a value is present in an array
+        function isIn(array, value) {
+            return array.indexOf(value) > -1;
+        }
+    </script>
+</body>
+
+</html>
